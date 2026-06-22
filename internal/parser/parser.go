@@ -8,20 +8,27 @@ import (
 	"github.com/my-go-crawler/pkg"
 
 	"github.com/gocolly/colly/v2"
+	"golang.org/x/time/rate"
 )
 
 type Parser interface {
 	Parse(ctx context.Context, url string) (*book.Book, error)
 }
 
-type parser struct{}
+type parser struct {
+	limiter *rate.Limiter
+}
 
-func NewParser() Parser {
-	return &parser{}
+func NewParser(limiter *rate.Limiter) Parser {
+	return &parser{limiter: limiter}
 }
 
 func (p *parser) Parse(ctx context.Context, url string) (*book.Book, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if err := p.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
 

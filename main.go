@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/my-go-crawler/internal/book"
 	"github.com/my-go-crawler/internal/crawler"
@@ -12,6 +13,7 @@ import (
 	"github.com/my-go-crawler/internal/parser"
 
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -53,12 +55,14 @@ func main() {
 	go func() { crawlWg.Wait(); close(urlChan) }()
 
 	// Stage 2: parse book detail pages
+	limiter := rate.NewLimiter(rate.Every(200*time.Microsecond), 5)
+
 	var parseWg sync.WaitGroup
 	for i := 0; i < parseWorkers; i++ {
 		parseWg.Add(1)
 		g.Go(func() error {
 			defer parseWg.Done()
-			p := parser.NewParser()
+			p := parser.NewParser(limiter)
 			for url := range urlChan {
 				select {
 				case <-ctx.Done():
