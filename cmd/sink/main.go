@@ -1,0 +1,44 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+
+	"github.com/my-go-crawler/config"
+	"github.com/my-go-crawler/internal/queue"
+	"github.com/my-go-crawler/pkg"
+)
+
+func main() {
+	fmt.Println("Sink")
+	rabbitmqUrl := config.EnvOr("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+	mq, err := queue.New(rabbitmqUrl)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer mq.Close()
+
+	mq.DeclareQueue(queue.QueueData)
+
+	ctx := context.Background()
+
+	mq.Subscribe(ctx, queue.QueueData, 10, func(d queue.Delivery) error {
+		var env queue.Envelope
+		if err := json.Unmarshal(d.Body, &env); err != nil {
+			return d.Nack(false)
+		}
+		var data map[string]any
+		json.Unmarshal([]byte(env.Payload), &data)
+
+		switch env.Source {
+		case "books":
+			fmt.Println("[JSON]")
+			pkg.DebugJson(data)
+		default:
+		}
+		return d.Ack()
+	})
+}

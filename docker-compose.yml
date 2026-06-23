@@ -1,0 +1,32 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scheduler:
+    build: { context: ., dockerfile: cmd/scheduler/Dockerfile }
+    environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+    restart: "no"
+
+  crawler:
+    build: { context: ., dockerfile: cmd/crawler/Dockerfile }
+    environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+
+  parser:
+    build: { context: ., dockerfile: cmd/parser/Dockerfile }
+    environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+
+  sink:
+    build: { context: ., dockerfile: cmd/sink/Dockerfile }
+    environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    depends_on: { rabbitmq: { condition: service_healthy } }

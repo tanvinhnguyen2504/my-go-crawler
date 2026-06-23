@@ -12,8 +12,8 @@ const (
 	MAIN_URL = "https://books.toscrape.com/catalogue"
 )
 
-func GetAllLinksBookByPage(ctx context.Context, pageIndex int, urlChan chan<- string) error {
-	pageUrl := fmt.Sprintf("%s/page-%d.html", MAIN_URL, pageIndex)
+func GetAllLinksBookByPage(ctx context.Context, baseURL string, pageIndex int, urlChan chan<- string) error {
+	pageUrl := fmt.Sprintf("%s/page-%d.html", baseURL, pageIndex)
 
 	c := colly.NewCollector()
 	c.OnHTML("article.product_pod h3 a", func(e *colly.HTMLElement) {
