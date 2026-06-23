@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: rabbitmq
+    static_configs:
+      - targets: ["rabbitmq:15692"]
+
+  - job_name: crawler
+    static_configs:
+      - targets: ["crawler:2112"]
+
+  - job_name: parser
+    static_configs:
+      - targets: ["parser:2113"]
+
+  - job_name: sink
+    static_configs:
+      - targets: ["sink:2114"]

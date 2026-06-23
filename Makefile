@@ -50,6 +50,9 @@ run-sink:
 up:
 	docker compose up --build
 
+# restart:
+# 	docker restart my-go
+
 down:
 	docker compose down
 
@@ -66,3 +69,15 @@ test:
 
 tidy:
 	go mod tidy
+
+up-monitoring:
+	docker compose up prometheus grafana -d
+
+open-grafana:
+	open http://localhost:3000
+
+open-prometheus:
+	open http://localhost:9090/targets
+
+open-rabbitmq:
+	open http://localhost:15672

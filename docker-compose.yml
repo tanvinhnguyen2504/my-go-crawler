@@ -4,11 +4,30 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+      - "15692:15692"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - rabbitmq
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    depends_on:
+      - prometheus
 
   scheduler:
     build: { context: ., dockerfile: cmd/scheduler/Dockerfile }
@@ -19,14 +38,17 @@ services:
   crawler:
     build: { context: ., dockerfile: cmd/crawler/Dockerfile }
     environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    ports: ["2112:2112"]
     depends_on: { rabbitmq: { condition: service_healthy } }
 
   parser:
     build: { context: ., dockerfile: cmd/parser/Dockerfile }
     environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    ports: ["2113:2113"]
     depends_on: { rabbitmq: { condition: service_healthy } }
 
   sink:
     build: { context: ., dockerfile: cmd/sink/Dockerfile }
     environment: { RABBITMQ_URL: "amqp://guest:guest@rabbitmq:5672/" }
+    ports: ["2114:2114"]
     depends_on: { rabbitmq: { condition: service_healthy } }
