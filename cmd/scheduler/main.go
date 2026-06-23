@@ -8,6 +8,7 @@ import (
 	"github.com/my-go-crawler/config"
 	"github.com/my-go-crawler/internal/queue"
 	"github.com/my-go-crawler/internal/source"
+	_ "github.com/my-go-crawler/internal/source/books"
 )
 
 func main() {

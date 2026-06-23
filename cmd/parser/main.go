@@ -10,6 +10,7 @@ import (
 	"github.com/my-go-crawler/internal/metrics"
 	"github.com/my-go-crawler/internal/queue"
 	"github.com/my-go-crawler/internal/source"
+	_ "github.com/my-go-crawler/internal/source/books"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

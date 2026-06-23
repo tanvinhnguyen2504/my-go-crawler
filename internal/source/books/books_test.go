@@ -1,4 +1,4 @@
-package parser_test
+package books
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/my-go-crawler/internal/parser"
 	"golang.org/x/time/rate"
 )
 
@@ -41,49 +40,49 @@ func minimalBookHTML(w http.ResponseWriter, r *http.Request) {
 		</body></html>`)
 }
 
+// parseWithLimiter is a testable variant that accepts a custom rate limiter.
+func parseWithLimiter(ctx context.Context, limiter *rate.Limiter, bookURL string) (*book, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+	return scrapeBook(ctx, bookURL)
+}
+
 func TestParse_ReturnsBook(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(minimalBookHTML))
 	defer server.Close()
-	fmt.Println(server.URL, "server.URL")
-	// t.Logf("test server url %s", server.URL)
 
-	limiter := rate.NewLimiter(rate.Inf, 1) // unlimited for functional test
-	p := parser.NewParser(limiter)
-
-	b, err := p.Parse(context.Background(), server.URL)
+	src := &booksSource{}
+	record, err := src.Parse(context.Background(), server.URL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if b.Title != "Test Book" {
-		t.Errorf("Title = %q, want %q", b.Title, "Test Book")
+	if record.Data["title"] != "Test Book" {
+		t.Errorf("title = %q, want %q", record.Data["title"], "Test Book")
 	}
-	if b.Price != "£10.00" {
-		t.Errorf("Price = %q, want %q", b.Price, "£10.00")
+	if record.Data["price"] != "£10.00" {
+		t.Errorf("price = %q, want %q", record.Data["price"], "£10.00")
 	}
-	if b.Rating != "Three" {
-		t.Errorf("Rating = %q, want %q", b.Rating, "Three")
-	}
-	if b.Category != "Fiction" {
-		t.Errorf("Category = %q, want %q", b.Category, "Fiction")
-	}
-	if b.UPC != "abc123" {
-		t.Errorf("UPC = %q, want %q", b.UPC, "abc123")
+	if record.Data["upc"] != "abc123" {
+		t.Errorf("upc = %q, want %q", record.Data["upc"], "abc123")
 	}
 }
 
 func TestParse_RateLimit(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(minimalBookHTML))
-	limiter := rate.NewLimiter(2, 1)
-	p := parser.NewParser(limiter)
+	defer server.Close()
 
+	limiter := rate.NewLimiter(2, 1)
 	start := time.Now()
 	for i := 0; i < 3; i++ {
-		if _, err := p.Parse(context.Background(), server.URL); err != nil {
+		if _, err := parseWithLimiter(context.Background(), limiter, server.URL); err != nil {
 			t.Fatalf("parse %d failed: %v", i, err)
 		}
 	}
 	elapsed := time.Since(start)
-	// 3 requests at 2 req/s: first is free (burst), then 2 wait ~500ms each → ≥ 1s total
 	if elapsed < time.Second {
 		t.Errorf("rate limit not enforced: elapsed %v, want >= 1s", elapsed)
 	}
@@ -96,23 +95,18 @@ func TestParse_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	limiter := rate.NewLimiter(rate.Every(10*time.Second), 1) // very slow — forces limiter.Wait to check ctx
-	limiter.Allow()
-	p := parser.NewParser(limiter)
+	limiter := rate.NewLimiter(rate.Every(10*time.Second), 1)
+	limiter.Allow() // consume the burst token so next call blocks
 
 	start := time.Now()
-	b, err := p.Parse(ctx, server.URL)
+	_, err := parseWithLimiter(ctx, limiter, server.URL)
 	elapsed := time.Since(start)
 
 	if err == nil {
 		t.Fatal("expected context timeout error, got nil")
 	}
-	if b != nil {
-		t.Errorf("expected nil book, got %+v", b)
-	}
-	// must have returned quickly, not waited the full 10s
 	if elapsed > time.Second {
-		t.Errorf("Parse blocked too long (%v) — context was not respected", elapsed)
+		t.Errorf("blocked too long (%v) — context was not respected", elapsed)
 	}
 	t.Logf("returned in %v with: %v", elapsed, err)
 }

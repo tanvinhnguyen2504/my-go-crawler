@@ -5,12 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-
-	"github.com/my-go-crawler/internal/book"
 )
 
 type Export interface {
-	StreamJSON(ctx context.Context, bookChan <-chan *book.Book, path string) (int, error)
+	StreamJSON(ctx context.Context, records <-chan map[string]any, path string) (int, error)
 }
 
 type export struct{}
@@ -19,7 +17,7 @@ func NewExport() Export {
 	return &export{}
 }
 
-func (e *export) StreamJSON(ctx context.Context, bookChan <-chan *book.Book, path string) (int, error) {
+func (e *export) StreamJSON(ctx context.Context, records <-chan map[string]any, path string) (int, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return 0, err
@@ -37,7 +35,7 @@ func (e *export) StreamJSON(ctx context.Context, bookChan <-chan *book.Book, pat
 		case <-ctx.Done():
 			w.WriteString("\n")
 			return count, ctx.Err()
-		case b, ok := <-bookChan:
+		case b, ok := <-records:
 			if !ok {
 				w.WriteString("\n")
 				return count, nil
