@@ -6,12 +6,14 @@ const (
 	QueueSeeds = "seeds"
 	QueueURLs  = "urls"
 	QueueData  = "data"
+	QueueDead  = "dead"
 )
 
 // Envelope là format chuẩn của mọi message trong pipeline.
 type Envelope struct {
 	Source  string `json:"source"`
 	Payload string `json:"payload"`
+	Attempt int    `json:"attempt,omitempty"`
 }
 
 // Delivery là message nhận được từ queue, kèm hàm Ack/Nack.

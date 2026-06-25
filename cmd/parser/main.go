@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/my-go-crawler/config"
 	"github.com/my-go-crawler/internal/metrics"
@@ -14,24 +15,30 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const (
+	maxMessageAttempts = 5
+	baseRetryDelay     = 2 * time.Second
+	maxRetryDelay      = 60 * time.Second
+)
+
 func main() {
 	go metrics.StartServer(":2113")
 
 	fmt.Println("parser...")
 	rabbitmqUrl := config.EnvOr("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	mq, err := queue.New(rabbitmqUrl)
-
 	if err != nil {
 		log.Fatal(err)
-		return
 	}
 	defer mq.Close()
 
 	mq.DeclareQueue(queue.QueueURLs)
 	mq.DeclareQueue(queue.QueueData)
+	mq.DeclareQueue(queue.QueueDead)
 
-	log.Println("parser stated, waiting for seed")
+	log.Println("parser started, waiting for urls")
 	ctx := context.Background()
+
 	mq.Subscribe(ctx, queue.QueueURLs, 5, func(d queue.Delivery) error {
 		var env queue.Envelope
 		if err := json.Unmarshal(d.Body, &env); err != nil {
@@ -53,9 +60,30 @@ func main() {
 
 		record, err := sp.Parse(ctx, env.Payload)
 		if err != nil {
-			log.Printf("parse error [%s] %s: %v", env.Source, env.Payload, err)
+			log.Printf("parse error [%s] attempt %d: %v", env.Source, env.Attempt+1, err)
 			metrics.MessagesProcessed.WithLabelValues("parser", env.Source, "error").Inc()
-			return d.Nack(true)
+
+			env.Attempt++
+			if env.Attempt >= maxMessageAttempts {
+				log.Printf("dead-lettering [%s] %s after %d attempts", env.Source, env.Payload, env.Attempt)
+				if dlErr := mq.DeadLetter(ctx, env, err.Error()); dlErr != nil {
+					log.Printf("dead-letter failed: %v — dropping", dlErr)
+				}
+				return d.Ack()
+			}
+
+			delay := baseRetryDelay * (1 << (env.Attempt - 1))
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+			log.Printf("retry [%s] attempt %d/%d in %v", env.Source, env.Attempt, maxMessageAttempts, delay)
+			time.Sleep(delay)
+			body, _ := json.Marshal(env)
+			if pubErr := mq.Publish(ctx, queue.QueueURLs, body); pubErr != nil {
+				log.Printf("re-publish failed: %v", pubErr)
+				return d.Nack(false)
+			}
+			return d.Ack()
 		}
 
 		payload, _ := json.Marshal(record.Data)

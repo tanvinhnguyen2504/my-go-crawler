@@ -2,7 +2,12 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
 
+	"github.com/my-go-crawler/pkg"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -12,10 +17,23 @@ type rabbitMQ struct {
 	subCh *amqp.Channel // channel riêng cho consume
 }
 
-// New kết nối tới RabbitMQ và mở 2 channel (publish + consume).
-// amqpURL ví dụ: "amqp://guest:guest@localhost:5672/"
 func New(amqpURL string) (*rabbitMQ, error) {
-	conn, err := amqp.Dial(amqpURL)
+	var conn *amqp.Connection
+	err := pkg.RetryWithBackoff(
+		context.Background(),
+		5,
+		500*time.Millisecond,
+		30*time.Second,
+		func(e error) bool { return true },
+		func() error {
+			var dialErr error
+			conn, dialErr = amqp.Dial(amqpURL) // gán vào outer conn, không dùng :=
+			if dialErr != nil {
+				log.Printf("rabbitmq dial failed: %v — retrying...", dialErr)
+			}
+			return dialErr
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -33,15 +51,11 @@ func New(amqpURL string) (*rabbitMQ, error) {
 	return &rabbitMQ{conn: conn, pubCh: pubCh, subCh: subCh}, nil
 }
 
-// DeclareQueue tạo queue durable nếu chưa có.
-// Idempotent — safe khi gọi nhiều lần hoặc queue đã tồn tại.
 func (r *rabbitMQ) DeclareQueue(name string) error {
 	_, err := r.subCh.QueueDeclare(name, true, false, false, false, nil)
 	return err
 }
 
-// Publish ghi một message vào queue qua default exchange.
-// DeliveryMode=Persistent đảm bảo message không mất khi RabbitMQ restart.
 func (r *rabbitMQ) Publish(ctx context.Context, queue string, body []byte) error {
 	return r.pubCh.PublishWithContext(ctx, "", queue, false, false, amqp.Publishing{
 		ContentType:  "application/json",
@@ -50,9 +64,12 @@ func (r *rabbitMQ) Publish(ctx context.Context, queue string, body []byte) error
 	})
 }
 
-// Subscribe lắng nghe queue và gọi handler cho mỗi message.
-// Handler tự chịu trách nhiệm gọi Ack hoặc Nack.
-// Block cho đến khi ctx bị cancel.
+func (r *rabbitMQ) DeadLetter(ctx context.Context, env Envelope, reason string) error {
+	env.Payload = fmt.Sprintf(`{"original":%s,"reason":%q}`, mustJSON(env.Payload), reason)
+	body, _ := json.Marshal(env)
+	return r.Publish(ctx, QueueDead, body)
+}
+
 func (r *rabbitMQ) Subscribe(ctx context.Context, queue string, prefetch int, handler func(Delivery) error) error {
 	if err := r.subCh.Qos(prefetch, 0, false); err != nil {
 		return err
@@ -82,4 +99,9 @@ func (r *rabbitMQ) Close() error {
 	r.pubCh.Close()
 	r.subCh.Close()
 	return r.conn.Close()
+}
+
+func mustJSON(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

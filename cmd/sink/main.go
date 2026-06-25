@@ -17,7 +17,6 @@ import (
 func main() {
 	go metrics.StartServer(":2114")
 
-	fmt.Println("Sink")
 	rabbitmqUrl := config.EnvOr("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	mq, err := queue.New(rabbitmqUrl)
 

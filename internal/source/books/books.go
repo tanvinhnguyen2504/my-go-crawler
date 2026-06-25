@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gocolly/colly/v2"
 	"github.com/my-go-crawler/internal/source"
@@ -14,6 +15,9 @@ import (
 func init() { source.Register("books", &booksSource{}) }
 
 const baseURL = "https://books.toscrape.com/catalogue"
+
+// bookLimiter dùng chung toàn bộ Parse() calls — 2 req/s, burst 1.
+var bookLimiter = rate.NewLimiter(rate.Every(500*time.Millisecond), 1)
 
 type book struct {
 	URL          string
@@ -48,7 +52,7 @@ func (b *booksSource) Crawl(ctx context.Context, seedURL string) ([]string, erro
 		rel, _ := url.Parse(e.Attr("href"))
 		urls = append(urls, base.ResolveReference(rel).String())
 	})
-	if err := c.Visit(seedURL); err != nil {
+	if err := b.visitWithRetry(ctx, c, seedURL); err != nil {
 		return nil, err
 	}
 	return urls, ctx.Err()
@@ -61,7 +65,7 @@ func (b *booksSource) Parse(ctx context.Context, bookURL string) (*source.Record
 	if err := rate.NewLimiter(rate.Inf, 1).Wait(ctx); err != nil {
 		return nil, err
 	}
-	bk, err := scrapeBook(ctx, bookURL)
+	bk, err := b.scrapeBook(ctx, bookURL)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +84,9 @@ func (b *booksSource) Parse(ctx context.Context, bookURL string) (*source.Record
 	}, nil
 }
 
-// scrapeBook fetches and parses a single book page. Separated so tests can
-// inject a custom rate limiter via parseWithLimiter.
-func scrapeBook(_ context.Context, bookURL string) (*book, error) {
+func (b *booksSource) scrapeBook(ctx context.Context, bookURL string) (*book, error) {
 	c := colly.NewCollector()
+	c.SetRequestTimeout(15 * time.Second)
 	bk := &book{URL: bookURL}
 	tableData := map[string]string{}
 
@@ -116,7 +119,7 @@ func scrapeBook(_ context.Context, bookURL string) (*book, error) {
 		tableData[e.ChildText("th")] = e.ChildText("td")
 	})
 
-	if err := c.Visit(bookURL); err != nil {
+	if err := b.visitWithRetry(ctx, c, bookURL); err != nil {
 		return nil, err
 	}
 
@@ -125,6 +128,18 @@ func scrapeBook(_ context.Context, bookURL string) (*book, error) {
 	bk.Tax = tableData["Tax"]
 	bk.NumReviews = tableData["Number of reviews"]
 
-	pkg.DebugJson(bk)
 	return bk, nil
+}
+
+func (b *booksSource) visitWithRetry(ctx context.Context, c *colly.Collector, url string) error {
+	err := pkg.RetryWithBackoff(
+		ctx,
+		3,
+		time.Second,
+		2*time.Second,
+		pkg.IsTransientNetwork,
+		func() error {
+			return c.Visit(url)
+		})
+	return err
 }

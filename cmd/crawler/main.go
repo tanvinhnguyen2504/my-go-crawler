@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
+	"time"
 
 	"github.com/my-go-crawler/config"
 	"github.com/my-go-crawler/internal/metrics"
@@ -14,21 +14,25 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const (
+	maxMessageAttempts = 5
+	baseRetryDelay     = 2 * time.Second
+	maxRetryDelay      = 60 * time.Second
+)
+
 func main() {
 	go metrics.StartServer(":2112")
 
-	fmt.Println("crawler..")
 	rabbitmqUrl := config.EnvOr("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	mq, err := queue.New(rabbitmqUrl)
-
 	if err != nil {
 		log.Fatal(err)
-		return
 	}
 	defer mq.Close()
 
 	mq.DeclareQueue(queue.QueueSeeds)
 	mq.DeclareQueue(queue.QueueURLs)
+	mq.DeclareQueue(queue.QueueDead)
 
 	log.Println("crawler started, waiting for seed")
 
@@ -55,9 +59,30 @@ func main() {
 
 		urls, err := sp.Crawl(ctx, env.Payload)
 		if err != nil {
-			log.Printf("crawl error [%s]: %v", env.Source, err)
+			log.Printf("crawl error [%s] attempt %d: %v", env.Source, env.Attempt+1, err)
 			metrics.MessagesProcessed.WithLabelValues("crawler", env.Source, "error").Inc()
-			return d.Nack(true)
+
+			env.Attempt++
+			if env.Attempt >= maxMessageAttempts {
+				log.Printf("dead-lettering [%s] %s after %d attempts", env.Source, env.Payload, env.Attempt)
+				if dlErr := mq.DeadLetter(ctx, env, err.Error()); dlErr != nil {
+					log.Printf("dead-letter failed: %v — dropping", dlErr)
+				}
+				return d.Ack()
+			}
+
+			delay := baseRetryDelay * (1 << (env.Attempt - 1))
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+			log.Printf("retry [%s] attempt %d/%d in %v", env.Source, env.Attempt, maxMessageAttempts, delay)
+			time.Sleep(delay)
+			body, _ := json.Marshal(env)
+			if pubErr := mq.Publish(ctx, queue.QueueSeeds, body); pubErr != nil {
+				log.Printf("re-publish failed: %v", pubErr)
+				return d.Nack(false)
+			}
+			return d.Ack()
 		}
 
 		for _, url := range urls {
